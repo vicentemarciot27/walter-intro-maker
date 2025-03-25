@@ -1,0 +1,50 @@
+# Arquivos de byte compilados Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Distribuição / empacotamento
+dist/
+build/
+*.egg-info/
+
+# Ambientes virtuais
+venv/
+env/
+ENV/
+.env
+.venv
+env/
+env.bak/
+venv.bak/
+
+# Arquivos de teste e cobertura
+.coverage
+htmlcov/
+.pytest_cache/
+nosetests.xml
+coverage.xml
+
+# Documentação
+docs/_build/
+
+# Arquivos de IDE e editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Arquivos de log
+*.log
+
+# Arquivos locais de configuração
+instance/
+.webassets-cache
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Arquivos específicos do sistema operacional
+.DS_Store
+Thumbs.db
