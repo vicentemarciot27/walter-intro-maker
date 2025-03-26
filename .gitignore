@@ -48,6 +48,9 @@ instance/
 # Jupyter Notebook
 .ipynb_checkpoints
 
+# every ipynb file
+*.ipynb
+
 # Arquivos específicos do sistema operacional
 .DS_Store
 Thumbs.db
