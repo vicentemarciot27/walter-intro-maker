@@ -50,3 +50,7 @@ structlog==24.4.0
 
 # Development
 ruff==0.9.4
+
+# Web Scraper
+beautifulsoup4==4.12.3
+aiohttp

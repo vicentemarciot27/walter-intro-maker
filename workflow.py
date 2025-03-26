@@ -199,7 +199,7 @@ def process_batch(batch, inputs, parameters, llm, previous_scores=None, gdoc_con
     - description (the description should be compatible with the company's description) | 0-3 points
     - observations (Use it as a situational reference of the fund) | -5 to 5 points
 
-    Begin reason with a summary of the decision.
+    Begin "reason" with a summary of the decision. Don't use words like "perfect" and be objective. End the reason with observations about the decision.
     """
     
     # Adicionar critério para o conteúdo do Google Doc se disponível
@@ -230,6 +230,8 @@ def process_batch(batch, inputs, parameters, llm, previous_scores=None, gdoc_con
     - observations: Any other information that should be considered when scoring the funds
     
     {inputs}
+
+    Remember to score the funds based on the criteria and the inputs.
     """
     
     # Adicionar conteúdo do Google Doc ao prompt se disponível

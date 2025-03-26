@@ -4,10 +4,9 @@ from langchain_openai import ChatOpenAI
 from langchain.output_parsers.structured import StructuredOutputParser
 from typing import TypedDict
 import time
-
 from database.engine import create_db
 from services.find_record import list_record_entries
-
+from services.web_scraper import get_search_results
 db, engine = create_db()
 
 def get_record_id_from_name(name: str, object: Literal["companies", "people"], additional_info: str = ""):
@@ -50,10 +49,19 @@ def get_record_id_from_name(name: str, object: Literal["companies", "people"], a
     # list record entries
     record_entries = list_record_entries(found_record_id, object)
 
+    # query_name = create_query_name(name, additional_info)
+    # query_market = create_query_market(name, additional_info)
+
+
+    # search_results_name = await get_search_results(query_name)
+    # search_results_market = await get_search_results(query_market)
+
     # add it to the llm_evaluation
     output = {
         **llm_evaluation,
-        "record_entries": record_entries
+        "record_entries": record_entries,
+        # "search_results_name": search_results_name,
+        # "search_results_market": search_results_market
     }
 
     return output
@@ -130,9 +138,36 @@ def evaluate_sql_query_results(sql_query_results: list[str], name: str, addition
         other_columns=response["other_columns"]
     )
 
+def create_query_name(name: str, additional_info: str):
+    """
+    Create a query name from a name and additional information.
+    """
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    prompt = f"""
+    You are a helpful assistant that creates a query name from a name and additional information.
+    The name is: {name}
+    The additional information is: {additional_info}
+    """
+    response = llm.invoke(prompt)
+    return response
+
+def create_query_market(name: str, additional_info: str):
+    """
+    Create a query market from a name and additional information.
+    """
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    prompt = f"""
+    You are a helpful assistant that queries the market of a company based on the name and additional information.
+    The name is: {name}
+    The additional information is: {additional_info}
+    """
+    response = llm.invoke(prompt)
+    return response
+
+
 
 if __name__ == "__main__":
-    company = ""
+    company = "Brendi"
     time_start = time.time()
     print(get_record_id_from_name(company, "companies"))
     time_end = time.time()
