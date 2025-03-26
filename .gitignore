@@ -18,6 +18,9 @@ env/
 env.bak/
 venv.bak/
 
+# Segredos
+.secrets/
+
 # Arquivos de teste e cobertura
 .coverage
 htmlcov/
