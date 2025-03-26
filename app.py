@@ -4,10 +4,13 @@ import json
 import time
 from workflow import run_fund_selection_workflow, load_data
 import subprocess
-from get_record_id import get_record_id_from_name
+from get_record_info import get_record_id_from_name
 from langchain_openai import ChatOpenAI
-from typing import TypedDict, Optional
+from typing import TypedDict, Optional, Dict
 from langchain.output_parsers.structured import StructuredOutputParser
+import asyncio
+from pydantic import BaseModel
+from services.web_scraper import get_search_results
 
 # Configuração da página
 st.set_page_config(
@@ -21,7 +24,7 @@ st.title("Walter Intro Maker")
 st.subheader("Intros to Funds Matcher")
 
 # Criando abas
-tab1, tab2 = st.tabs(["Company Information", "Parameters"])
+tab1, tab2 = st.tabs(["Search Information", "Parameters"])
 
 # Inicializar estado da sessão para parâmetros e resultados
 if 'parameters' not in st.session_state:
@@ -29,7 +32,7 @@ if 'parameters' not in st.session_state:
         "batch_size": 10,
         "surviving_percentage": 1,
         "gdoc_id": "1AkNbFeXe5dvuzBVhFQUDfPh7B51YmjhasSGRUW4mMm0",
-        "use_docs": True
+        "use_docs": False
     }
 
 if 'results' not in st.session_state:
@@ -57,12 +60,18 @@ if 'company_data' not in st.session_state:
     }
 
 # Definir a estrutura de saída para o LLM
+class Round(TypedDict):
+    round_size: float
+    round_type: str
+    round_commitment: float
+
 class CompanyInfo(TypedDict):
     """
     Informações estruturadas sobre uma empresa.
     """
     description_company: str
     description_person: Optional[str]
+    round: Round
     industry: str
     observations: str
 
@@ -87,8 +96,9 @@ def extract_company_info(company_record):
     3. Informações sobre a rodada de investimento:
        - Tamanho aproximado em milhões de USD (round_size)
        - Tipo de rodada (round_type) por exemplo: Seed, Series A, etc.
+       - Quanto já foi investido (round_commitment). In doubt, make it 0.
     4. Descrição do representante ou CEO (description_person)
-    5. Any other relevant information (observations). Try to include things like the company's website, employee count, list appearances... any information.
+    5. Any other relevant information (observations). Try to include things like the company's website, employee count, list  earances... any information.
     
     Se alguma informação não estiver disponível, coloque ["NOT FOUND"]
     """
@@ -103,8 +113,10 @@ def extract_company_info(company_record):
         if "round_size" in company_data and company_data["round_size"]:
             try:
                 company_data["round_size"] = float(company_data["round_size"])
+                company_data["round_commitment"] = float(company_data["round_commitment"])
             except (ValueError, TypeError):
                 company_data["round_size"] = 10  # valor padrão
+                company_data["round_commitment"] = 0
                 
         return company_data
     except Exception as e:
@@ -113,12 +125,62 @@ def extract_company_info(company_record):
             "description_company": "",
             "description_person": "",
             "industry": "",
+            "round": {"round_size": 10, "round_type": "", "round_commitment": 0},
             "observations": f"Erro ao processar: {str(e)}"
         }
+
+# Adicionar após a definição da classe CompanyInfo
+async def enrich_company_information(company_name: str, industry: str) -> dict:
+
+    class Query(BaseModel):
+        query_name: str
+        query_market: str
+
+    # Criar queries para busca
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+    
+    query_prompt = f"""
+    Crie duas queries de busca diferentes para obter informações sobre:
+    1. Uma query que me dá informações sobre {company_name}
+    2. Uma query que me dá estatísticas quantitativas sobre o mercado {industry}
+    
+    Retorne apenas as duas queries, uma por linha, sem numeração ou texto adicional.
+    """
+    
+    queries = llm.with_structured_output(Query).invoke(query_prompt)
+    company_query, market_query = queries.query_name, queries.query_market
+    
+    # Realizar web scraping
+    company_results = await get_search_results(company_query, max_results=2)
+    market_results = await get_search_results(market_query, max_results=4)
+    
+    # Consolidar informações usando LLM
+    consolidation_prompt = f"""
+    Analise as informações coletadas e crie um resumo estruturado.
+    
+    Informações da empresa:
+    {json.dumps(company_results, indent=2)}
+    
+    Informações do mercado:
+    {json.dumps(market_results, indent=2)}
+    
+    Formate o resumo em tópicos separados para Empresa e Mercado.
+    """
+    
+    summary = llm.invoke(consolidation_prompt)
+    
+    return {
+        "company_info": company_results,
+        "market_info": market_results,
+        "summary": summary
+    }
 
 with tab1:
     # Campo para buscar empresa por nome
     company_name = st.text_input("Buscar empresa por nome", value=st.session_state.company_data["company"])
+
+    # Adicionar seção de informações enriquecidas
+    check = st.checkbox("Enrich with web search (takes more time, not performing well yet)")
     
     if st.button("Buscar informações"):
         try:
@@ -134,8 +196,26 @@ with tab1:
                     "company": company_name,
                     **company_info
                 })
-                
-                st.success(f"Informações de {company_name} encontradas e preenchidas!")
+            if check:
+                with st.expander("Informações Adicionais"):
+                    with st.spinner("Buscando informações complementares..."):
+                        enriched_info = asyncio.run(enrich_company_information(company_name, company_info))
+                        
+                        # Exibir resultados
+                        st.text("Informações coletadas da web:")
+                        st.markdown(enriched_info["summary"].content)
+                        
+                        st.write("Fontes sobre a empresa:")
+                        for result in enriched_info["company_info"]:
+                            st.write(f"- [{result.get('title', 'Link')}]({result.get('url', '#')})")
+                    
+                        st.write("Fontes sobre o mercado:")
+                        for result in enriched_info["market_info"]:
+                            st.write(f"- [{result.get('title', 'Link')}]({result.get('url', '#')})")
+                        
+                        
+
+                        st.success(f"Informações de {company_name} encontradas e preenchidas!")
         except Exception as e:
             st.error(f"Erro ao buscar informações: {str(e)}")
 
@@ -146,6 +226,7 @@ with tab1:
         col1, col2 = st.columns(2)
         
         with col1:
+            st.text("Company Information")
             company = st.text_input("Company Name", value=st.session_state.company_data["company"])
             description_company = st.text_area(
                 "Company Description", 
@@ -161,16 +242,17 @@ with tab1:
             )
         
         with col2:
+            st.text("Fundraising Information")
             round_size = st.number_input("Round Size (in millions of USD)", value=st.session_state.company_data["round_size"], help="Tamanho da rodada em milhões de USD")
             round_type = st.text_input("Funding Type", value=st.session_state.company_data["round_type"])
             round_commitment = st.number_input("Round Commitment (in millions of USD)", value=st.session_state.company_data["round_commitment"], help="Tamanho da rodada em milhões de USD")
             leader_or_follower = st.selectbox(
-                "Position in Round",
+                "Position in Round (Are we looking for a leader or a follower?)",
                 options=["leader", "follower", "both"],
                 index=["leader", "follower", "both"].index(st.session_state.company_data["leader_or_follower"])
             )
             fund_closeness = st.selectbox(
-                "Fund Proximity",
+                "Fund Proximity (How close we want the fund to be to us?)",
                 options=["Close", "Distant", "Irrelevant"],
                 index=["Close", "Distant", "Irrelevant"].index(st.session_state.company_data["fund_closeness"])
             )
@@ -222,13 +304,14 @@ with tab1:
             st.session_state.progress = "starting"
             st.rerun()
 
+
 with tab2:
     st.subheader("Generation Parameters")
     
     # Formulário para parâmetros
     with st.form("parameters_form"):
-        batch_size = st.slider("Batch Size", 1, 50, st.session_state.parameters["batch_size"])
-        surviving_percentage = st.slider("Survival Percentage", 0.1, 1.0, st.session_state.parameters["surviving_percentage"], 0.1)
+        batch_size = st.slider("Batch Size", 1, 50, int(st.session_state.parameters.get("batch_size", 10)))
+        surviving_percentage = st.slider("Survival Percentage", 0.1, 1.0, float(st.session_state.parameters.get("surviving_percentage", 1)), 0.1)
         
         # Adicionar campo para ID do Google Doc
         gdoc_id = st.text_input("ID do Google Doc", 
@@ -251,6 +334,8 @@ with tab2:
 
 st.subheader("Analysis Results")
 
+st.info("This demo takes a while to run since it runs fund by fund. Please be patient.")
+
 # Verificar se o processamento deve começar
 if st.session_state.progress == "starting" and st.session_state.inputs:
     # Container para exibir progresso
@@ -263,11 +348,6 @@ if st.session_state.progress == "starting" and st.session_state.inputs:
         # Carregar dados
         status_container.info("Loading data...")
         progress_container.progress(10)
-        
-        # Verificar se há ID do Google Doc
-        if st.session_state.parameters.get("gdoc_id"):
-            status_container.info(f"Loading Google Doc content: {st.session_state.parameters['gdoc_id']}...")
-            progress_container.progress(20)
         
         # Processar seleção de fundos
         status_container.info("Analyzing compatible funds...")
