@@ -4,6 +4,11 @@ import json
 import time
 from workflow import run_fund_selection_workflow, load_data
 import subprocess
+from get_record_id import get_record_id_from_name
+from langchain_openai import ChatOpenAI
+from typing import TypedDict, Optional
+from langchain.output_parsers.structured import StructuredOutputParser
+
 # Configuração da página
 st.set_page_config(
     page_title="Walter Intro Maker",
@@ -22,8 +27,9 @@ tab1, tab2 = st.tabs(["Company Information", "Parameters"])
 if 'parameters' not in st.session_state:
     st.session_state.parameters = {
         "batch_size": 10,
-        "surviving_percentage": 0.5,
+        "surviving_percentage": 1,
         "gdoc_id": "1AkNbFeXe5dvuzBVhFQUDfPh7B51YmjhasSGRUW4mMm0",
+        "use_docs": True
     }
 
 if 'results' not in st.session_state:
@@ -35,7 +41,104 @@ if 'inputs' not in st.session_state:
 if 'progress' not in st.session_state:
     st.session_state.progress = None
 
+if 'company_data' not in st.session_state:
+    st.session_state.company_data = {
+        "company": "",
+        "description_company": "",
+        "description_person": "",
+        "industry": "",
+        "round_size": 10,
+        "round_type": "Series A",
+        "round_commitment": 2,
+        "leader_or_follower": "leader",
+        "fund_closeness": "Close",
+        "fund_quality": "High",
+        "observations": "",
+    }
+
+# Definir a estrutura de saída para o LLM
+class CompanyInfo(TypedDict):
+    """
+    Informações estruturadas sobre uma empresa.
+    """
+    description_company: str
+    description_person: Optional[str]
+    industry: str
+    observations: str
+
+# Função para extrair informações da empresa usando LLM
+def extract_company_info(company_record):
+
+    print(f"Company record: {company_record}")
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+    
+    # Configurar LLM para retornar saída estruturada
+    llm = llm.with_structured_output(CompanyInfo)
+    
+    prompt = f"""
+    Baseado nas informações da empresa a seguir, extraia dados para preencher um formulário.
+    
+    Informações da empresa:
+    {company_record}
+    
+    Por favor, forneça as seguintes informações (se disponíveis):
+    1. Uma descrição completa da empresa (description_company)
+    2. A indústria/setor de atuação (industry) - forneça múltiplos setores separados por vírgulas
+    3. Informações sobre a rodada de investimento:
+       - Tamanho aproximado em milhões de USD (round_size)
+       - Tipo de rodada (round_type) por exemplo: Seed, Series A, etc.
+    4. Descrição do representante ou CEO (description_person)
+    5. Any other relevant information (observations). Try to include things like the company's website, employee count, list appearances... any information.
+    
+    Se alguma informação não estiver disponível, coloque ["NOT FOUND"]
+    """
+    
+    # O LLM já retornará diretamente a estrutura definida em CompanyInfo
+    try:
+        company_data = llm.invoke(prompt)
+
+        print(f"Company data: {company_data}")
+                
+        # Garantir que campos numéricos sejam do tipo correto
+        if "round_size" in company_data and company_data["round_size"]:
+            try:
+                company_data["round_size"] = float(company_data["round_size"])
+            except (ValueError, TypeError):
+                company_data["round_size"] = 10  # valor padrão
+                
+        return company_data
+    except Exception as e:
+        st.error(f"Erro ao processar dados da empresa: {str(e)}")
+        return {
+            "description_company": "",
+            "description_person": "",
+            "industry": "",
+            "observations": f"Erro ao processar: {str(e)}"
+        }
+
 with tab1:
+    # Campo para buscar empresa por nome
+    company_name = st.text_input("Buscar empresa por nome", value=st.session_state.company_data["company"])
+    
+    if st.button("Buscar informações"):
+        try:
+            with st.spinner("Buscando informações da empresa..."):
+                # Obter informações da empresa usando a função get_record_id_from_name
+                company_record = get_record_id_from_name(company_name, "companies")
+                
+                # Extrair informações relevantes usando LLM
+                company_info = extract_company_info(company_record)
+                
+                # Atualizar o estado da sessão com as informações obtidas
+                st.session_state.company_data.update({
+                    "company": company_name,
+                    **company_info
+                })
+                
+                st.success(f"Informações de {company_name} encontradas e preenchidas!")
+        except Exception as e:
+            st.error(f"Erro ao buscar informações: {str(e)}")
+
     # Formulário para dados da empresa
     with st.form("company_form"):
         st.subheader("Company Information")
@@ -43,43 +146,64 @@ with tab1:
         col1, col2 = st.columns(2)
         
         with col1:
-            company = st.text_input("Company Name", value="Brendi")
+            company = st.text_input("Company Name", value=st.session_state.company_data["company"])
             description_company = st.text_area(
                 "Company Description", 
-                value="Brendi is a company that creates AI agents to sell food in Brazilian restaurants via delivery. They are going to be the next ifood"
+                value=st.session_state.company_data["description_company"]
             )
             description_person = st.text_area(
                 "Representative Description", 
-                value="Daniel is the CEO of Brendi. he studied at ITA, is very young and energetic"
+                value=st.session_state.company_data["description_person"]
             )
             industry = st.text_input(
                 "Industry", 
-                value="AI Solutions, Food Delivery, Restaurant Management, AI Agents, Embedded Finance"
+                value=st.session_state.company_data["industry"]
             )
         
         with col2:
-            round_size = st.number_input("Round Size (in millions of USD)", value=10, help="Tamanho da rodada em milhões de USD")
-            round_type = st.text_input("Funding Type", value="Series A")
-            round_commitment = st.number_input("Round Commitment (in millions of USD)", value=2, help="Tamanho da rodada em milhões de USD")
+            round_size = st.number_input("Round Size (in millions of USD)", value=st.session_state.company_data["round_size"], help="Tamanho da rodada em milhões de USD")
+            round_type = st.text_input("Funding Type", value=st.session_state.company_data["round_type"])
+            round_commitment = st.number_input("Round Commitment (in millions of USD)", value=st.session_state.company_data["round_commitment"], help="Tamanho da rodada em milhões de USD")
             leader_or_follower = st.selectbox(
                 "Position in Round",
                 options=["leader", "follower", "both"],
-                index=0
+                index=["leader", "follower", "both"].index(st.session_state.company_data["leader_or_follower"])
             )
             fund_closeness = st.selectbox(
                 "Fund Proximity",
                 options=["Close", "Distant", "Irrelevant"],
-                index=0
+                index=["Close", "Distant", "Irrelevant"].index(st.session_state.company_data["fund_closeness"])
+            )
+
+            fund_quality = st.selectbox(
+                "Fund Quality",
+                options=["High", "Medium", "Low"],
+                index=["High", "Medium", "Low"].index(st.session_state.company_data["fund_quality"])
             )
             
         observations = st.text_area(
             "Additional Observations", 
-            value="We are sure this deal is very hot, so we want the top funds with us in this one, but they have to fit"
+            value=st.session_state.company_data["observations"]
         )
         
-        submitted = st.form_submit_button("Generate Introduction")
+        submitted = st.form_submit_button("Get introduceable funds")
         
         if submitted:
+            # Atualizar os dados da empresa no estado da sessão
+            st.session_state.company_data = {
+                "company": company,
+                "description_company": description_company,
+                "description_person": description_person,
+                "industry": industry,
+                "round_size": round_size,
+                "round_type": round_type,
+                "round_commitment": round_commitment,
+                "leader_or_follower": leader_or_follower,
+                "fund_closeness": fund_closeness,
+                "fund_quality": fund_quality,
+                "observations": observations
+            }
+            
             # Criar o dicionário de inputs
             st.session_state.inputs = {
                 "company": company,
@@ -90,6 +214,7 @@ with tab1:
                 "leader_or_follower": leader_or_follower,
                 "industry": industry,
                 "fund_closeness": fund_closeness,
+                "fund_quality": fund_quality,
                 "observations": observations
             }
             
@@ -134,15 +259,7 @@ if st.session_state.progress == "starting" and st.session_state.inputs:
     
     # Mostrar processo de execução
     try:
-        # Run the script file
-        result = subprocess.Popen(['bash', 'run.sh'], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        stdout, stderr = result.communicate()
 
-        # Display the terminal output
-        st.text('\n'.join(stdout.decode().split('\n')[1:][:-1]))
-        progress_container.progress(0)
-        status_container.info("Starting processing...")
-        
         # Carregar dados
         status_container.info("Loading data...")
         progress_container.progress(10)
